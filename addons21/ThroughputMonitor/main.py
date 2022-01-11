@@ -49,13 +49,24 @@ adjusted_initial_guess = settings['initial_throughput_guess'] - settings['goal_o
 
 addon_path = os.path.dirname(__file__)
 fire_file = os.path.join(addon_path, 'img', 'fire.png')
+score_images = [
+    os.path.join(addon_path, 'img', 'D.png'),
+    os.path.join(addon_path, 'img', 'C.png'),
+    os.path.join(addon_path, 'img', 'B.png'),
+    os.path.join(addon_path, 'img', 'A.png'),
+    os.path.join(addon_path, 'img', 'S.png'),
+    os.path.join(addon_path, 'img', 'SS.png'),
+    os.path.join(addon_path, 'img', 'SSS.png'),
+]
+score_streak = 0
+skip_update_once = False
 _flameLabel = None
 
 def getFlame(parent=None):
     global _flameLabel
 
     myImage = QImage()
-    myImage.load(fire_file)
+    myImage.load(score_images[min(score_streak, len(score_images)-1)])
 
     aw = parent or mw.app.activeWindow() or mw
     myLabel = QLabel(aw)
@@ -68,9 +79,13 @@ def getFlame(parent=None):
     myLabel.setLineWidth(2)
     #myLabel.setWindowFlags(Qt.ToolTip)
     vdiff = settings['flame_height'] + 128 # 128 add to account for the review bar at the bottom of the window
-    myLabel.setMargin(10)
-    myLabel.move(QPoint(0, aw.height() - vdiff))
+    myLabel.setMargin(8)
+    #move to bottom
+    #myLabel.move(QPoint(0, aw.height() - vdiff))
+    #move to top
+    myLabel.move(QPoint(10, 64))
     
+
     # set that the image can be shrunk if window is also shrunk
     #myLabel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
     # scale the image to fit the size of the label
@@ -85,7 +100,7 @@ class ProgressBarHolder(object):
             textColor="white",
             bgColor=settings['countdown_colors'][0]['fg_color'] if settings['invert_timer'] else settings['countdown_colors'][0]['bg_color'],
             fgColor=settings['countdown_colors'][0]['bg_color'] if settings['invert_timer'] else settings['countdown_colors'][0]['fg_color'],
-            borderRadius=0,
+            borderRadius=4,
             maxWidth="",
             orientationHV=Qt.Horizontal if bar_area == Qt.TopDockWidgetArea or bar_area == Qt.BottomDockWidgetArea else Qt.Vertical,
             invertTF=not settings['invert_timer'],
@@ -99,7 +114,7 @@ class ProgressBarHolder(object):
             textColor="white",
             bgColor="#584cbf",
             fgColor="#4539d1",
-            borderRadius=0,
+            borderRadius=4,
             maxWidth="",
             orientationHV=Qt.Horizontal if bar_area == Qt.TopDockWidgetArea or bar_area == Qt.BottomDockWidgetArea else Qt.Vertical,
             invertTF=False,
@@ -113,7 +128,7 @@ class ProgressBarHolder(object):
             textColor="white",
             bgColor="#582A72",
             fgColor="#862ab8",
-            borderRadius=0,
+            borderRadius=4,
             maxWidth="",
             orientationHV=Qt.Horizontal if bar_area == Qt.TopDockWidgetArea or bar_area == Qt.BottomDockWidgetArea else Qt.Vertical,
             invertTF=False,
@@ -142,10 +157,15 @@ class ThroughputTracker(object):
         self.countdownColorIndex = 0
         self.cardsLeftSnapshot = 0
 
-    def update(self):
+    def update(self, resetTimer=False):
         time_left = settings['timebox'] - self.batchStopwatch.get_time()
 
         if time_left < 0:
+            print("THROUGHPUT update time_left < 0")
+            #reset score_streak on natural resets
+            global score_streak
+            score_streak = 0
+
             #update batch point history
             if self.batchPointCount[0] > 0 or settings['penalize_idle']:
                 self.previous_batches.append([float(self.batchPointCount[0]), float(self.batchPointCount[1])])
@@ -158,12 +178,30 @@ class ThroughputTracker(object):
             self.batchStopwatch.start()
 
             # readjust bars
-            self.setPointFormat([0,0], throughput)
+            self.setPointFormat([0,0], throughput, remove_flame=True)
             self.setCountdownFormat(0)
 
         else:
-            self.setCountdownFormat(self.batchStopwatch.get_time())
-            throughput = self.get_exponential_decay()
+            if resetTimer:
+                print("THROUGHPUT update resetTimer")
+                #update batch point history
+                if self.batchPointCount[0] > 0 or settings['penalize_idle']:
+                    self.previous_batches.append([float(self.batchPointCount[0]), float(self.batchPointCount[1])])
+                    if len(self.previous_batches) > settings['number_batches_to_keep']:
+                        self.previous_batches = self.previous_batches[1:1+settings['number_batches_to_keep']]
+                    self.batchPointCount = [0,0]
+                throughput = self.get_exponential_decay()
+
+                global skip_update_once
+                skip_update_once = True
+                self.batchStopwatch.reset()
+                self.batchStopwatch.start()
+
+                self.setCountdownFormat(0)
+            
+            else:
+                self.setCountdownFormat(self.batchStopwatch.get_time())
+                throughput = self.get_exponential_decay()
 
         if settings['show_time_till_end']:
             self.setStudyTimeLeftFormat(throughput[0])
@@ -218,7 +256,9 @@ class ThroughputTracker(object):
         
         return node
 
-    def setPointFormat(self, curr, maximum):
+    def setPointFormat(self, curr, maximum, repaint=False, insert_flame=False, remove_flame=False):
+        print(f"THROUGHPUT setPointFormat curr:{curr} max:{maximum} repaint:{repaint}")
+        print(f"THROUGHPUT setPointFormat self.batchPointCount[1]:{self.batchPointCount[1]}")
         curr = curr[1]
         maximum = int(maximum[1])
         maximum += settings['goal_offset']
@@ -242,9 +282,24 @@ class ThroughputTracker(object):
 
         if settings['show_flame']:
             global _flameLabel
-            if self.batchPointCount[1] >= maximum and _flameLabel == None:
+            #if self.batchPointCount[1] >= maximum and _flameLabel == None:
+            if self.batchPointCount[1] >= maximum or insert_flame:
+                print("THROUGHPUT re-draw flame")
+                #delete old flame as the image might have changed
+                old_flame = _flameLabel
+                _flameLabel = None
+                try:
+                    old_flame.deleteLater()
+                except:
+                    # already deleted as parent window closed
+                    pass
+                
+                #re-draw flame
                 getFlame()
-            if self.batchPointCount[1] < maximum and _flameLabel != None:
+            #if self.batchPointCount[1] < maximum and _flameLabel != None:
+            elif remove_flame and _flameLabel != None:
+                print("THROUGHPUT delete flame")
+                #delete old flame 
                 old_flame = _flameLabel
                 _flameLabel = None
                 try:
@@ -273,7 +328,20 @@ class ThroughputTracker(object):
                 self.batchPointCount[1] = 0
 
         pointbar_max = self.get_exponential_decay()
-        self.setPointFormat(self.batchPointCount, pointbar_max)
+
+        #reset timer if we pass the goal
+        if self.batchPointCount[0] >= (int(pointbar_max[1])+settings['goal_offset']):
+            #increment score_streak
+            global score_streak
+            print("THROUGHPUT increment score update", score_streak)
+            score_streak += 1
+            #Reset timer (like winning a round)
+            self.update(resetTimer=True)
+            pointbar_max = self.get_exponential_decay()
+            self.setPointFormat(self.batchPointCount, pointbar_max, insert_flame=True)
+        else:
+            self.setPointFormat(self.batchPointCount, pointbar_max)
+
 
     ### COUNTDOWN BAR
 
@@ -366,7 +434,7 @@ def GetStateForCol(repaintFormat=False):
         throughput_tracker.dailyStudyTime = getDailyStudyTime(mw.col.decks.active())
         throughput = throughput_tracker.get_exponential_decay()
         throughput_tracker.setStudyTimeLeftFormat(throughput[0])
-        throughput_tracker.setPointFormat(throughput_tracker.batchPointCount, throughput)
+        throughput_tracker.setPointFormat(throughput_tracker.batchPointCount, throughput, repaint=True)
         throughput_tracker.setCountdownFormat(throughput_tracker.batchStopwatch.get_time(), force_recolor=True)
 
     return throughput_tracker
@@ -467,7 +535,12 @@ def onRefreshTimer():
         return
 
     if throughput_tracker.batchStopwatch.is_running():
-        throughput_tracker.update()
+        global skip_update_once
+        if skip_update_once:
+            print(f"THROUGHPUT skip_update_once:{skip_update_once}")
+            skip_update_once = False
+        else:
+            throughput_tracker.update()
 # refresh page periodically
 refreshTimer = mw.progress.timer(100, onRefreshTimer, True)
 
@@ -481,6 +554,7 @@ def updateThroughputOnAnswer(x, card, ease):
     throughput_tracker.currentAnswerStopwatch.reset()
     throughput_tracker.currentAnswerStopwatch.start()
     throughput_tracker.adjustPointCount(card, increment=True)
+
 sched1.answerCard = wrap(sched1.answerCard, updateThroughputOnAnswer, "before")
 sched2.answerCard = wrap(sched2.answerCard, updateThroughputOnAnswer, "before")
 
@@ -497,6 +571,7 @@ def updateThroughputOnUndo(x, _old):
 
         throughput_tracker.adjustPointCount(card, increment=False)
     return cardid
+
 _Collection.undo = wrap(_Collection.undo, updateThroughputOnUndo, "around")
 
 # stop the stopwatch when we exit reviews

@@ -93,6 +93,8 @@ class ProgressBar:
                 color:%s;
                 background-color: %s;
                 border-radius: %dpx;
+                margin-left: 1px;
+                margin-right: 1px;
                 %s
             }
                 QProgressBar::chunk
